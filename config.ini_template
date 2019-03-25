@@ -1,0 +1,10 @@
+[bitbucket]
+url = 
+project = 
+repo = 
+
+[config]
+chunks =
+
+[jira]
+prefix =
