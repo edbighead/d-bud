@@ -1,6 +1,6 @@
 package main
 
-type PR struct {
+type PullRequest struct {
 	Values []struct {
 		Title string
 		State string
