@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -37,6 +38,42 @@ func DoHTTPGet(url string, bearer string, ch chan<- Response) {
 	ch <- pr
 }
 
+func GetJiraIDs(url string, token string) ([]string, map[string]IssuePR) {
+	var issues []string
+	iprs := make(map[string]IssuePR)
+
+	req, err := http.NewRequest("GET", url, nil)
+
+	req.Header.Add("Authorization", token)
+
+	client := &http.Client{}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Println("Error on response.\n[ERROR] -", err)
+	}
+
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	var jiraResponse JiraResponse
+
+	json.Unmarshal(body, &jiraResponse)
+
+	for _, i := range jiraResponse.Issues {
+
+		key := i.Key
+
+		var oneIssuePR IssuePR
+		oneIssuePR.Issue = i
+
+		issues = append(issues, key)
+		iprs[key] = oneIssuePR
+
+	}
+
+	return issues, iprs
+}
+
 func handleReq(rw http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
 	var q queryObject
@@ -44,11 +81,10 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		panic(err)
 	}
-	// log.Println(q.Branch)
-
 	start := time.Now()
 
-	token := os.Getenv("BITBUCKET_TOKEN")
+	bitBucketToken := os.Getenv("BITBUCKET_TOKEN")
+	jiraToken := os.Getenv("JIRA_TOKEN")
 
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
@@ -60,15 +96,20 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	project := cfg.Section("bitbucket").Key("project").String()
 	repos := strings.Split(cfg.Section("bitbucket").Key("repo").String(), ",")
 	chunkSize := cfg.Section("config").Key("chunks").MustInt(9999)
-	jirePrefix := cfg.Section("jira").Key("prefix").String()
-	re := regexp.MustCompile(jirePrefix + `-\d*`)
+	jiraPrefix := cfg.Section("jira").Key("prefix").String()
+	jiraUrl := cfg.Section("jira").Key("url").String()
 
-	// temp
-	issues := []string{"IIA-3063", "IIA-3064", "IIA-3080"}
+	re := regexp.MustCompile(jiraPrefix + `-\d*`)
+	var bearer = "Bearer " + bitBucketToken
+	var authorization = "Basic " + jiraToken
 	refs := q.Branch
+	jql := url.QueryEscape(q.JQL)
+
+	requestUrl := jiraUrl + "/rest/api/2/search?jql=" + jql
+
+	issues, fullIssues := GetJiraIDs(requestUrl, authorization)
 
 	var matchedIssues []string
-	var bearer = "Bearer " + token
 	var divided [][]string
 
 	for i := 0; i < len(repos); i += chunkSize {
@@ -84,8 +125,7 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	var ch chan Response = make(chan Response)
 
 	var matchedPRs []PullRequest
-	var fullIssues []Issue
-	var emptyIssue Issue
+	var emptyIssue IssuePR
 
 	for _, chunk := range divided {
 		for _, repo := range chunk {
@@ -93,6 +133,7 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 			go DoHTTPGet(url, bearer, ch)
 		}
 	}
+
 	for range repos {
 		for _, pr := range (<-ch).Values {
 			match := re.FindAllString(pr.Title, -1)
@@ -100,7 +141,7 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 			if len(match) > 0 {
 				for _, m := range match {
 					if contains(issues, m) {
-						matchedIssues = AppendIfMissing(matchedIssues, m)
+						matchedIssues = AppendIfMissing(matchedIssues, m) //array of issues required for release
 						matchedPRs = AppendIfMissingPullRequest(matchedPRs, pr)
 					}
 				}
@@ -109,23 +150,24 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	for _, matchedIssue := range matchedIssues {
-		var i Issue
-		i.IssueID = matchedIssue
+		var i IssuePR
+		i.Issue = fullIssues[matchedIssue].Issue
+		// i.Issue.Key = matchedIssue
 		for _, pr := range matchedPRs {
 
 			if contains(pr.Issues, matchedIssue) {
-
 				i.addItem(pr)
 			}
+
 		}
-		fullIssues = append(fullIssues, i)
+		fullIssues[matchedIssue] = i
 	}
 
 	noPRs := difference(issues, matchedIssues)
 
 	for _, id := range noPRs {
-		emptyIssue.IssueID = id
-		fullIssues = append(fullIssues, emptyIssue)
+		emptyIssue.Issue = fullIssues[id].Issue
+		fullIssues[id] = emptyIssue
 	}
 
 	pagesJson, err := json.Marshal(fullIssues)
@@ -134,17 +176,12 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	elapsed := time.Since(start)
-	
+
 	rw.Header().Set("Content-Type", "application/json")
 	rw.Write(pagesJson)
-	
+
 	log.Printf("Took %s", elapsed)
 }
-
-
-
-
-
 
 func main() {
 	router := mux.NewRouter()

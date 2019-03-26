@@ -17,17 +17,36 @@ type PullRequest struct {
 			Slug string
 		}
 	}
+	Links struct {
+		Self []struct {
+			Href string
+		}
+	}
 	Issues []string
 }
 
-type Issue struct {
-	IssueID     string
+type IssuePR struct {
+	Issue       Issue
 	Pullrequest []PullRequest
 }
 
 type queryObject struct {
 	Branch string
 	JQL    string
+}
+
+type JiraResponse struct {
+	Issues []Issue
+}
+
+type Issue struct {
+	Key    string
+	Fields struct {
+		Summary string
+		Project struct {
+			Key string
+		}
+	}
 }
 
 func AppendIfMissingPullRequest(slice []PullRequest, i PullRequest) []PullRequest {
@@ -71,7 +90,7 @@ func difference(a, b []string) []string {
 	return ab
 }
 
-func (box *Issue) addItem(item PullRequest) []PullRequest {
+func (box *IssuePR) addItem(item PullRequest) []PullRequest {
 	box.Pullrequest = append(box.Pullrequest, item)
 	return box.Pullrequest
 }
