@@ -1,0 +1,7 @@
+.git
+.dockerignore
+.gitignore
+.vscode/
+LICENSE
+README.md
+*_template

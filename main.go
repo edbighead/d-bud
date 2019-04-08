@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -38,8 +37,9 @@ func DoHTTPGet(url string, bearer string, ch chan<- Response) {
 	ch <- pr
 }
 
-func GetJiraIDs(url string, token string) ([]string, map[string]IssuePR) {
+func GetJiraIDs(jiraURL, jql, token string) ([]string, map[string]IssuePR) {
 	var issues []string
+	url := jiraURL + "/rest/api/2/search?jql=" + jql
 	iprs := make(map[string]IssuePR)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -75,6 +75,7 @@ func GetJiraIDs(url string, token string) ([]string, map[string]IssuePR) {
 }
 
 func handleReq(rw http.ResponseWriter, req *http.Request) {
+	setupCORS(&rw, req)
 	decoder := json.NewDecoder(req.Body)
 	var q queryObject
 	err := decoder.Decode(&q)
@@ -103,11 +104,9 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	var bearer = "Bearer " + bitBucketToken
 	var authorization = "Basic " + jiraToken
 	refs := q.Branch
-	jql := url.QueryEscape(q.JQL)
+	jql := q.JQL
 
-	requestUrl := jiraUrl + "/rest/api/2/search?jql=" + jql
-
-	issues, fullIssues := GetJiraIDs(requestUrl, authorization)
+	issues, fullIssues := GetJiraIDs(jiraUrl, jql, authorization)
 
 	var matchedIssues []string
 	var divided [][]string
@@ -152,7 +151,7 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	for _, matchedIssue := range matchedIssues {
 		var i IssuePR
 		i.Issue = fullIssues[matchedIssue].Issue
-		// i.Issue.Key = matchedIssue
+		i.URL = jiraUrl + "/browse/" + fullIssues[matchedIssue].Issue.Key
 		for _, pr := range matchedPRs {
 
 			if contains(pr.Issues, matchedIssue) {
@@ -167,10 +166,16 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 
 	for _, id := range noPRs {
 		emptyIssue.Issue = fullIssues[id].Issue
+		emptyIssue.URL = jiraUrl + "/browse/" + fullIssues[id].Issue.Key
 		fullIssues[id] = emptyIssue
 	}
 
-	pagesJson, err := json.Marshal(fullIssues)
+	var transformedIssues []IssuePR
+	for _, value := range fullIssues {
+		transformedIssues = append(transformedIssues, value)
+	}
+
+	pagesJson, err := json.Marshal(transformedIssues)
 	if err != nil {
 		log.Fatal("Cannot encode to JSON ", err)
 	}
@@ -178,14 +183,20 @@ func handleReq(rw http.ResponseWriter, req *http.Request) {
 	elapsed := time.Since(start)
 
 	rw.Header().Set("Content-Type", "application/json")
+
 	rw.Write(pagesJson)
 
 	log.Printf("Took %s", elapsed)
 }
+func setupCORS(w *http.ResponseWriter, req *http.Request) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+}
 
 func main() {
 	router := mux.NewRouter()
-	router.HandleFunc("/pullrequests", handleReq).Methods("POST")
+	router.HandleFunc("/pullrequests", handleReq).Methods("POST", "OPTIONS")
 
 	log.Fatal(http.ListenAndServe(":8000", router))
 }

@@ -26,6 +26,7 @@ type PullRequest struct {
 }
 
 type IssuePR struct {
+	URL         string
 	Issue       Issue
 	Pullrequest []PullRequest
 }
@@ -43,9 +44,6 @@ type Issue struct {
 	Key    string
 	Fields struct {
 		Summary string
-		Project struct {
-			Key string
-		}
 	}
 }
 
